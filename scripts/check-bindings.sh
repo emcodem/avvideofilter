@@ -13,7 +13,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fail() { echo "check-bindings: $*" >&2; exit 1; }
 
-sys="$(ldconfig -p | awk '/libavutil\.so\.[0-9]+ / {print $NF; exit}')"
+sys="$(ldconfig -p | awk '/libavutil\.so\.[0-9]+ / && !n++ {print $NF}')"
 if [ -n "$sys" ]; then
   echo "check-bindings: preloading system $(readlink -f "$sys")"
 else
@@ -33,6 +33,6 @@ good="$(grep -cE " to \S*_avvf\.so\.[0-9]+ " "$TMP/ours" || true)"
 bad="$(grep -E " to \S*/lib(av|sw|postproc)[a-z]*\.so\.[0-9]+ " "$TMP/ours" || true)"
 
 [ -z "$bad" ] || fail "bundled code bound to the system FFmpeg:
-$(echo "$bad" | head -20)"
+$(sed -n '1,20p' <<<"$bad")"
 [ "$good" -gt 0 ] || fail "no bindings into the bundled FFmpeg seen (plugin not loaded from $DIR?)"
 echo "check-bindings: OK ($good bindings into the bundle, none into the system FFmpeg)"

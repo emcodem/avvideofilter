@@ -48,7 +48,7 @@ cd "ffmpeg-${FFMPEG_VERSION}"
 # Version scripts start with e.g. "LIBAVUTIL_MAJOR {"; the build replaces
 # MAJOR with the major version. Insert our tag in front of it.
 sed -i 's/^\(LIB[A-Z]*\)_MAJOR\b/\1_AVVF_MAJOR/' lib*/lib*.v
-grep -h '_AVVF_MAJOR' lib*/lib*.v | grep -q . || { echo "version scripts not patched" >&2; exit 1; }
+grep -qh '_AVVF_MAJOR' lib*/lib*.v || { echo "version scripts not patched" >&2; exit 1; }
 
 CONFIGURE=(
   --prefix=/opt/ffmpeg-avvf
@@ -68,13 +68,13 @@ for f in "$P"/lib/lib*_avvf.so.*.*.*; do
   patchelf --set-rpath '$ORIGIN' "$f"
   # every FFmpeg symbol version (defined or referenced) is an _AVVF_ one
   vers="$(objdump -T "$f" | grep -oE '\bLIB(AV|SW|POSTPROC)[A-Z]*_[A-Z0-9_]+' | sort -u)"
-  echo "$vers" | grep -q '_AVVF_' || { echo "$f: no _AVVF_ symbol versions" >&2; exit 1; }
-  echo "$vers" | grep -v '_AVVF_' | grep -q . && { echo "$f: plain symbol versions left: $vers" >&2; exit 1; }
+  grep -q '_AVVF_' <<<"$vers" || { echo "$f: no _AVVF_ symbol versions" >&2; exit 1; }
+  grep -qv '_AVVF_' <<<"$vers" && { echo "$f: plain symbol versions left: $vers" >&2; exit 1; }
 done
 cp COPYING.LGPLv2.1 LICENSE.md "$P/"
 {
   echo "FFmpeg ${FFMPEG_VERSION} (https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz)"
-  echo "Built in ${IMAGE} ($(ldd --version | head -1))"
+  echo "Built in ${IMAGE} ($(ldd --version 2>&1 | sed -n 1p))"
   echo "configure ${CONFIGURE[*]}"
 } > "$P/BUILDINFO.txt"
 

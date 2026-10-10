@@ -16,18 +16,18 @@ compgen -G "$DIR/*.so.*" >/dev/null && fail "versioned libraries next to the plu
 compgen -G "$FFDIR/*.so" >/dev/null && fail ".so files in $FFDIR (GStreamer would scan them)"
 
 deps="$(ldd "$PLUGIN" "$FFDIR"/*.so.*)"
-echo "$deps" | grep -q "not found" && fail "unresolved libraries:
+grep -q "not found" <<<"$deps" && fail "unresolved libraries:
 $(echo "$deps" | grep "not found")"
 # every libav*/libsw* must come from the bundle, never from the system
 bad="$(echo "$deps" | grep -E '\blib(av|sw|postproc)' | grep -v "$FFDIR/" || true)"
 [ -z "$bad" ] || fail "FFmpeg libraries resolved outside the bundle:
 $bad"
-echo "$deps" | grep -E '\blib(av|sw)[a-z]*_avvf' | grep -q . || fail "plugin does not link the bundled FFmpeg"
+grep -qE '\blib(av|sw)[a-z]*_avvf' <<<"$deps" || fail "plugin does not link the bundled FFmpeg"
 
 # FFmpeg symbol versions referenced or defined anywhere in the bundle must be
 # the bundle's own (_AVVF_), so nothing can bind to a system FFmpeg
 vers="$(objdump -T "$PLUGIN" "$FFDIR"/*.so.* | grep -oE '\bLIB(AV|SW|POSTPROC)[A-Z]*_[A-Z0-9_]+' | sort -u)"
-echo "$vers" | grep -q '_AVVF_' || fail "no _AVVF_ symbol versions found"
+grep -q '_AVVF_' <<<"$vers" || fail "no _AVVF_ symbol versions found"
 plain="$(echo "$vers" | grep -v '_AVVF_' || true)"
 [ -z "$plain" ] || fail "plain FFmpeg symbol versions: $plain"
 

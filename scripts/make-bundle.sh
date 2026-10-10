@@ -17,13 +17,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$ROOT/build-bundle"
-VERSION="${1:-$(sed -n "s/^ *version *: *'\([^']*\)'.*/\1/p" "$ROOT/meson.build" | head -1)}"
+VERSION="${1:-$(sed -n "0,/^ *version *: *'/s/^ *version *: *'\([^']*\)'.*/\1/p" "$ROOT/meson.build")}"
 # Build environment, read from the system that builds the bundle. The minimum
 # glibc and GStreamer go into the file name (like manylinux wheels) and, with
 # the rest, into BUILDINFO.txt, which the workflow copies into the release notes.
 GST_BUILT="$(pkg-config --modversion gstreamer-1.0)"
 GST_MIN="$(sed -n "s/^gst_req *= *'>= *\([0-9.]*\)'.*/\1/p" "$ROOT/meson.build")"
-GLIBC="$(ldd --version | head -1 | grep -oE '[0-9]+\.[0-9]+$')"
+# No pipes that end early (head, grep -q, awk exit): under pipefail the
+# writer's SIGPIPE fails the script at random (exit 141).
+GLIBC="$(ldd --version 2>&1 | sed -n '1s/.* \([0-9][0-9]*\.[0-9][0-9]*\)$/\1/p')"
 BUILD_OS="$(. /etc/os-release && echo "$PRETTY_NAME")"
 COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 # The file name has no version, so releases/latest/download/<name> is a stable
