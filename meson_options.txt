@@ -1,0 +1,9 @@
+# Build against the bundled FFmpeg (third_party/ffmpeg, see scripts/make-bundle.sh):
+# its libraries carry a name suffix (libavfilter_avvf) and sit next to the
+# plugin in a subdirectory found through RUNPATH.
+option('ffmpeg_suffix', type : 'string', value : '',
+  description : 'FFmpeg library name suffix (--build-suffix), e.g. _avvf')
+option('ffmpeg_rpath', type : 'string', value : '',
+  description : 'RUNPATH for the installed plugin, e.g. $ORIGIN/avvideofilter-ffmpeg')
+option('release_version', type : 'string', value : '',
+  description : 'Version reported by the plugin (default: project version)')

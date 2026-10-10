@@ -1,0 +1,159 @@
+# Every push to master: build the self-contained bundle (plugin + prebuilt
+# FFmpeg from third_party/ffmpeg), test it on each supported distro and
+# publish it as a GitHub release.
+#
+# Version: <major>.<minor> from meson.build + the commit count, e.g. 0.1.42.
+name: build-release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The oldest supported system: glibc 2.35, GStreamer 1.20.
+    container: ubuntu:22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            git ca-certificates build-essential pkg-config ninja-build python3-pip \
+            xz-utils binutils libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+          pip3 install -q 'meson==1.5.2'
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the commit count is the patch version
+
+      - id: version
+        name: Version
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          base=$(sed -n "s/^ *version *: *'\([0-9]*\.[0-9]*\)\..*/\1/p" meson.build | head -1)
+          echo "version=$base.$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build bundle
+        run: scripts/make-bundle.sh "${{ steps.version.outputs.version }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundle
+          path: |
+            build-bundle/dist/*.tar.gz*
+            build-bundle/dist/BUILDINFO.txt
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "ubuntu:22.04", name: ubuntu-22.04 }
+          - { image: "debian:12",    name: debian-12 }
+          - { image: "ubuntu:24.04", name: ubuntu-24.04 }
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install GStreamer runtime
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-libav python3 python3-gi gir1.2-gstreamer-1.0 \
+            gir1.2-gst-plugins-base-1.0 binutils
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: bundle
+
+      - name: Install the bundle like a user would
+        run: |
+          sha256sum -c avvideofilter-*.tar.gz.sha256
+          dest="$HOME/.local/share/gstreamer-1.0/plugins"
+          mkdir -p "$dest"
+          tar -xzf avvideofilter-*.tar.gz -C "$dest" --strip-components=1
+          scripts/check-bundle.sh "$dest"
+          gst-inspect-1.0 avvideofilter | grep -E "Version|Filename"
+
+      - name: Bundled FFmpeg stays separate from the system FFmpeg
+        run: scripts/check-bindings.sh "$HOME/.local/share/gstreamer-1.0/plugins"
+
+      - name: Tests
+        run: python3 tests/run_tests.py
+
+      - name: Record the tested system for the release notes
+        run: |
+          os="$(. /etc/os-release && echo "$PRETTY_NAME")"
+          gst="$(gst-inspect-1.0 --version | sed -n 's/^GStreamer //p')"
+          ff="$(dpkg-query -W -f='${Version}' 'libavcodec[0-9]*' 2>/dev/null | head -1)"
+          echo "| $os | $gst | ${ff:-none} | passed |" > tested-${{ matrix.name }}.md
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tested-${{ matrix.name }}
+          path: tested-${{ matrix.name }}.md
+
+  release:
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: bundle
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: tested-*
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          # The tarball name has no version, so releases/latest/download/<name>
+          # always fetches the newest build (the glibc/GStreamer part stays, so
+          # a changed build base gets a new URL instead of breaking old systems)
+          f="$(ls avvideofilter-*.tar.gz)"
+          url="https://github.com/${GH_REPO}/releases/latest/download/$f"
+          {
+            echo "Self-contained build of avvideofilter with its own FFmpeg for Linux amd64."
+            echo "The file name states the minimum glibc and GStreamer: \`$f\`"
+            echo
+            echo "### Target"
+            echo '```'
+            cat BUILDINFO.txt
+            echo '```'
+            echo
+            echo "### Tested on"
+            echo "| System | GStreamer | System FFmpeg (gst-libav) | Tests |"
+            echo "|---|---|---|---|"
+            cat tested-*.md
+            echo
+            echo "### Install"
+            echo "Download the latest release and unpack it into your user's GStreamer plugin directory:"
+            echo '```'
+            echo "mkdir -p ~/.local/share/gstreamer-1.0/plugins"
+            echo "wget -qO- $url | tar -xz -C ~/.local/share/gstreamer-1.0/plugins --strip-components=1"
+            echo "gst-inspect-1.0 avvideofilter"
+            echo '```'
+            echo "The link always points to the newest release. For exactly this version, download \`$f\` below and unpack it the same way (\`tar -xzf $f -C ...\`)."
+            echo "See the [README](https://github.com/${GH_REPO}#readme) for details."
+          } > notes.md
+          cat notes.md
+          gh release create "v$VERSION" "$f" "$f.sha256" \
+            --target "$GITHUB_SHA" --title "avvideofilter $VERSION" --notes-file notes.md
